@@ -39,10 +39,27 @@ const STOP = new Set([
   "tiene",
   "tienen",
   "hacer",
+  "cuando",
+  "debo",
+  "puede",
 ]);
 
+/** Colloquial words → the stem the official documents use (matched by substring). */
+const SYNONYMS: Record<string, string> = {
+  cambiar: "traslad",
+  cambiarme: "traslad",
+  cambio: "traslad",
+  pasarme: "traslad",
+};
+
 export function queryTerms(text: string): string[] {
-  return [...new Set(tokenize(text).filter((t) => !STOP.has(t)))];
+  return [
+    ...new Set(
+      tokenize(text)
+        .filter((t) => !STOP.has(t))
+        .map((t) => SYNONYMS[t] ?? t)
+    ),
+  ];
 }
 
 export function scoreText(content: string, terms: string[]): number {

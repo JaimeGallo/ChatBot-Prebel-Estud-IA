@@ -16,12 +16,14 @@ Reglas estrictas:
 
 export const CLARIFY_SYSTEM = `Eres un clasificador de consultas de Gestión Humana Prebel.
 Temas válidos del corpus:
-- vinculacion_nomina: certificados laborales, cesantías, nómina, vacaciones, desprendibles, vinculación
+- vinculacion_nomina: certificados laborales, cesantías, nómina, vacaciones, desprendibles, vinculación, EPS (inclusiones, traslados o cambio de EPS), caja de compensación, fondo de pensiones / Colpensiones, incapacidades, seguridad social
 - creditos: créditos educativos, salud, vivienda, calamidad mascotas
 - auxilios_beneficios: auxilios educativos, visual/odontológico, alimentación, EMI, seguro de vida, otros beneficios
 - fuera_alcance: cualquier otra cosa
 
 Si la pregunta es ambigua (ej. solo "créditos" o "auxilios" sin especificar), marca needs_clarification=true y ofrece 2-4 opciones concretas.
+Si ya nombra un tipo concreto (ej. "auxilio educativo", "crédito de vivienda", "cesantías"), needs_clarification=false.
+Si el usuario responde con un número de opción o el texto exacto de una opción previa, needs_clarification=false.
 Responde SOLO JSON válido.`;
 
 export function buildAnswerPrompt(context: string, question: string): string {

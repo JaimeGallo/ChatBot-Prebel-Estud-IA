@@ -9,7 +9,7 @@ Repo: [JaimeGallo/ChatBot-Prebel-Estud-IA](https://github.com/JaimeGallo/ChatBot
 | Capa | Tecnología |
 |------|------------|
 | App | Next.js 15 (App Router) → **Vercel** |
-| LLM | **Groq** (`llama-3.3-70b-versatile`) |
+| LLM | **Groq** (`openai/gpt-oss-20b`) |
 | Retrieval | Lexical / keyword scoring por tema (corpus FAQ, sin modelo de embeddings) |
 | DB | **Neon** Postgres |
 | WhatsApp | Meta Cloud API (webhook) |

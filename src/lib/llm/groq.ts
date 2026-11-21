@@ -8,7 +8,9 @@ import {
   type ClarifyResult,
 } from "./prompts";
 
-const MODEL = "llama-3.3-70b-versatile";
+/** Override with GROQ_MODEL if the account's default id differs. */
+const MODEL =
+  process.env.GROQ_MODEL?.trim() || "openai/gpt-oss-20b";
 
 function getGroq() {
   const key = process.env.GROQ_API_KEY;

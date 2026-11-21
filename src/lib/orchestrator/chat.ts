@@ -8,9 +8,36 @@ import { classifyAndClarify, generateGroundedAnswer } from "@/lib/llm/groq";
 import { retrieveChunks, formatContext } from "@/lib/rag/retrieve";
 import {
   getOrCreateSession,
+  getRecentMessages,
   logMessage,
   logEvent,
 } from "@/lib/telemetry";
+
+/** Map "1"/"2" replies to the option text from the last clarification. */
+function resolveClarificationChoice(
+  message: string,
+  history: { role: "user" | "assistant"; content: string }[]
+): string {
+  const trimmed = message.trim();
+  const match = /^([1-9])$/.exec(trimmed);
+  if (!match) return message;
+
+  const lastWithOptions = [...history]
+    .reverse()
+    .find(
+      (m) => m.role === "assistant" && /^\s*\d+\.\s+.+/m.test(m.content)
+    );
+  if (!lastWithOptions) return message;
+
+  const options = [
+    ...lastWithOptions.content.matchAll(/^\s*(\d+)\.\s+(.+)$/gm),
+  ];
+  const chosen = options.find((o) => o[1] === match[1]);
+  if (!chosen) return message;
+
+  const label = chosen[2].trim();
+  return `Necesito información sobre: ${label}`;
+}
 
 export type ChatRequest = {
   message: string;
@@ -60,12 +87,20 @@ export async function handleChat(req: ChatRequest): Promise<ChatResponse> {
     externalId: req.externalId,
   });
 
-  const guard = checkPromptInjection(req.message);
+  const history =
+    req.history?.length
+      ? req.history
+      : await getRecentMessages(session.id, 8);
+
+  const resolvedMessage = resolveClarificationChoice(req.message, history);
+  const pickedClarificationOption =
+    resolvedMessage.trim() !== req.message.trim();
+  const guard = checkPromptInjection(resolvedMessage);
 
   await logMessage({
     sessionId: session.id,
     role: "user",
-    content: guard.sanitized || req.message,
+    content: guard.sanitized || resolvedMessage,
     blocked: guard.blocked,
   });
 
@@ -96,10 +131,31 @@ export async function handleChat(req: ChatRequest): Promise<ChatResponse> {
     };
   }
 
-  const classification = await classifyAndClarify(
-    guard.sanitized,
-    req.history ?? []
-  );
+  const classification = await classifyAndClarify(guard.sanitized, history);
+
+  // User already chose 1/2/3… or an option label from a prior menu — answer, don't re-ask.
+  const choseListedOption =
+    pickedClarificationOption ||
+    history.some(
+      (m) =>
+        m.role === "assistant" &&
+        /^\s*\d+\.\s+.+/m.test(m.content) &&
+        [...m.content.matchAll(/^\s*\d+\.\s+(.+)$/gm)].some(
+          (o) =>
+            o[1].trim().toLowerCase() === guard.sanitized.trim().toLowerCase()
+        )
+    );
+
+  if (choseListedOption) {
+    classification.needs_clarification = false;
+    if (
+      classification.topic === "fuera_alcance" ||
+      classification.confidence < 0.5
+    ) {
+      // Short picks like "1" / "Auxilio educativo" often follow the auxilios menu.
+      classification.topic = "auxilios_beneficios";
+    }
+  }
 
   if (classification.needs_clarification) {
     const reply = formatClarification(
@@ -203,7 +259,38 @@ export async function handleChat(req: ChatRequest): Promise<ChatResponse> {
     answer = await generateGroundedAnswer(guard.sanitized, context);
   } catch (err) {
     console.error("LLM failed:", err);
-    answer = OUT_OF_SCOPE_MESSAGE;
+    const reply =
+      "Tuvimos un problema técnico al generar la respuesta (servicio de IA). Intenta de nuevo en un momento.";
+    await logMessage({
+      sessionId: session.id,
+      role: "assistant",
+      content: reply,
+      topic: classification.topic,
+      grounded: false,
+      latencyMs: Date.now() - started,
+      metadata: { llm_error: String(err) },
+    });
+    await logEvent({
+      sessionId: session.id,
+      type: "llm_error",
+      topic: classification.topic,
+      channel: req.channel,
+      payload: { message: String(err) },
+    });
+    return {
+      sessionId: session.id,
+      reply,
+      topic: classification.topic,
+      grounded: false,
+      clarified: false,
+      blocked: false,
+      sources: chunks.map((c) => ({
+        source: c.source,
+        section: c.section,
+        score: c.score,
+      })),
+      latencyMs: Date.now() - started,
+    };
   }
 
   // Soft grounding check: if model drifted away from out-of-scope phrase incorrectly with empty-ish

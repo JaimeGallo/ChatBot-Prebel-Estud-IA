@@ -86,6 +86,30 @@ export async function logMessage(input: {
   return row;
 }
 
+/** Last N user/assistant turns for follow-ups (e.g. WhatsApp "1" after clarification). */
+export async function getRecentMessages(
+  sessionId: string,
+  limit = 8
+): Promise<{ role: "user" | "assistant"; content: string }[]> {
+  const db = getDb();
+  const rows = await db
+    .select({
+      role: messages.role,
+      content: messages.content,
+    })
+    .from(messages)
+    .where(eq(messages.sessionId, sessionId))
+    .orderBy(desc(messages.createdAt))
+    .limit(limit);
+
+  return rows
+    .reverse()
+    .filter(
+      (r): r is { role: "user" | "assistant"; content: string } =>
+        r.role === "user" || r.role === "assistant"
+    );
+}
+
 export async function logEvent(input: {
   sessionId?: string;
   type: string;
