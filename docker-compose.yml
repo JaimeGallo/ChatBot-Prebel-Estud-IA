@@ -1,0 +1,10 @@
+# Fase futura on-prem Prebel (opcional). La demo EstudIA usa Vercel + Neon.
+services:
+  app:
+    build: .
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env
+    environment:
+      - NODE_ENV=production
