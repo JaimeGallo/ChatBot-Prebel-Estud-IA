@@ -10,6 +10,8 @@ async function main() {
 
   const sql = neon(url);
   const docsDir = join(process.cwd(), "docs");
+  // Re-chunk even if the markdown is unchanged (needed after chunker changes).
+  const force = process.argv.includes("--force");
 
   console.log("Ensuring schema...");
   await sql`CREATE EXTENSION IF NOT EXISTS pgcrypto`;
@@ -31,6 +33,7 @@ async function main() {
     `;
 
     if (
+      !force &&
       existing[0] &&
       (existing[0] as { content_hash: string }).content_hash === hash
     ) {

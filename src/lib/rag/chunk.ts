@@ -37,7 +37,9 @@ export function chunkMarkdown(markdown: string, maxChars = 900): TextChunk[] {
         .replace(/[ \t]+/g, " ")
         .trim()
     )
-    .replace(/\r\n/g, "\n");
+    .replace(/\r\n/g, "\n")
+    // Auxilios/Créditos use bold-only lines as subsection titles.
+    .replace(/^\*\*([^*\n]+?)\*\*:?\s*$/gm, "### $1");
 
   const sections = cleaned.split(/(?=^#{1,3}\s)/m).filter((s) => s.trim());
   const chunks: TextChunk[] = [];

@@ -3,6 +3,17 @@ import { getDb, schema } from "@/lib/db";
 
 const { sessions, messages, events } = schema;
 
+/** After this much inactivity a conversation starts fresh (old menus no longer apply). */
+const SESSION_IDLE_MS = 30 * 60 * 1000;
+
+type SessionRow = typeof sessions.$inferSelect;
+
+function isSessionOpen(s: SessionRow): boolean {
+  const closed = Boolean((s.metadata as { closedAt?: string } | null)?.closedAt);
+  const idle = Date.now() - s.lastActiveAt.getTime() > SESSION_IDLE_MS;
+  return !closed && !idle;
+}
+
 export async function getOrCreateSession(opts: {
   channel: "web" | "whatsapp";
   sessionId?: string;
@@ -11,23 +22,15 @@ export async function getOrCreateSession(opts: {
 }) {
   const db = getDb();
 
+  let existing: SessionRow | undefined;
   if (opts.sessionId) {
-    const existing = await db
+    [existing] = await db
       .select()
       .from(sessions)
       .where(eq(sessions.id, opts.sessionId))
       .limit(1);
-    if (existing[0]) {
-      await db
-        .update(sessions)
-        .set({ lastActiveAt: new Date() })
-        .where(eq(sessions.id, opts.sessionId));
-      return existing[0];
-    }
-  }
-
-  if (opts.externalId) {
-    const byExt = await db
+  } else if (opts.externalId) {
+    [existing] = await db
       .select()
       .from(sessions)
       .where(
@@ -36,14 +39,16 @@ export async function getOrCreateSession(opts: {
           eq(sessions.channel, opts.channel)
         )
       )
+      .orderBy(desc(sessions.lastActiveAt))
       .limit(1);
-    if (byExt[0]) {
-      await db
-        .update(sessions)
-        .set({ lastActiveAt: new Date() })
-        .where(eq(sessions.id, byExt[0].id));
-      return byExt[0];
-    }
+  }
+
+  if (existing && isSessionOpen(existing)) {
+    await db
+      .update(sessions)
+      .set({ lastActiveAt: new Date() })
+      .where(eq(sessions.id, existing.id));
+    return existing;
   }
 
   const [created] = await db
@@ -84,6 +89,25 @@ export async function logMessage(input: {
     })
     .returning();
   return row;
+}
+
+export async function closeSession(sessionId: string, reason: string) {
+  const db = getDb();
+  const [row] = await db
+    .select({ metadata: sessions.metadata })
+    .from(sessions)
+    .where(eq(sessions.id, sessionId))
+    .limit(1);
+  await db
+    .update(sessions)
+    .set({
+      metadata: {
+        ...(row?.metadata ?? {}),
+        closedAt: new Date().toISOString(),
+        closeReason: reason,
+      },
+    })
+    .where(eq(sessions.id, sessionId));
 }
 
 /** Last N user/assistant turns for follow-ups (e.g. WhatsApp "1" after clarification). */

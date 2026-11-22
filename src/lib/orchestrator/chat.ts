@@ -7,11 +7,101 @@ import {
 import { classifyAndClarify, generateGroundedAnswer } from "@/lib/llm/groq";
 import { retrieveChunks, formatContext } from "@/lib/rag/retrieve";
 import {
+  closeSession,
   getOrCreateSession,
   getRecentMessages,
   logMessage,
   logEvent,
 } from "@/lib/telemetry";
+
+const MAIN_MENU = [
+  "Vinculación y Nómina",
+  "Créditos y Condiciones",
+  "Auxilios y Beneficios",
+] as const;
+
+const CLARIFY_MARKER = "Para enfocarte mejor la respuesta";
+const WELCOME_MARKER = "Puedo ayudarte con:";
+const MENU_MARKERS = [CLARIFY_MARKER, WELCOME_MARKER];
+
+const CATEGORY_OPTIONS: Record<(typeof MAIN_MENU)[number], string[]> = {
+  "Vinculación y Nómina": [
+    "Certificados laborales",
+    "Retiro de cesantías",
+    "Inclusiones y traslados de EPS",
+    "Caja de compensación familiar",
+    "Traslado a Colpensiones",
+    "Vacaciones",
+    "Incapacidades",
+  ],
+  "Créditos y Condiciones": [
+    "Crédito educativo / computador",
+    "Crédito de salud",
+    "Crédito de vivienda",
+    "Calamidad de mascotas",
+  ],
+  "Auxilios y Beneficios": [
+    "Auxilio educativo",
+    "Auxilio visual u odontológico",
+    "Alimentación",
+    "Otros beneficios",
+  ],
+};
+
+const WELCOME_MESSAGE = `¡Hola! Soy el asistente de Gestión Humana de Prebel. ${WELCOME_MARKER}
+
+${MAIN_MENU.map((c, i) => `${i + 1}. ${c}`).join("\n")}
+
+Escribe tu pregunta o el número de la opción.
+
+Recuerda: este asistente responde únicamente con base en los documentos cargados.`;
+
+const FAREWELL_MESSAGE =
+  "¡Con gusto! Si necesitas más detalles, aquí estoy para ayudarte. Que tengas un excelente día.";
+
+const GREETING_WORDS = new Set(
+  "hola holi buenos buenas buen dia dias tardes noches hey saludos que tal como estas esta".split(" ")
+);
+const FAREWELL_TRIGGERS = new Set(
+  "gracias chao chau adios hasta bye listo ok okay perfecto".split(" ")
+);
+const FAREWELL_WORDS = new Set([
+  ...FAREWELL_TRIGGERS,
+  ..."muchas mil muy por la tu su ayuda amable eso era es todo luego nos vemos info informacion".split(" "),
+]);
+
+/** Pure greetings/farewells only — any message with other content goes to the pipeline. */
+function detectSmallTalk(text: string): "greeting" | "farewell" | null {
+  const words = text
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .split(/[^a-z]+/)
+    .filter(Boolean);
+  if (!words.length || text.includes("?")) return null;
+  if (
+    words.some((w) => FAREWELL_TRIGGERS.has(w)) &&
+    words.every((w) => FAREWELL_WORDS.has(w))
+  ) {
+    return "farewell";
+  }
+  if (words.every((w) => GREETING_WORDS.has(w))) return "greeting";
+  return null;
+}
+
+/** Terms that only exist in Vinculación y Nómina; overrides classifier confusion with credits. */
+const NOMINA_ONLY_RE =
+  /cesant|\beps\b|colpensiones|vacacion|caja de compensaci|comfama|comfenalco/i;
+
+function topicFromLabel(
+  label: string
+): "vinculacion_nomina" | "creditos" | "auxilios_beneficios" {
+  if (/cr[eé]dito/i.test(label)) return "creditos";
+  if (/auxilio|beneficio|alimentaci|seguro|emi\b/i.test(label)) {
+    return "auxilios_beneficios";
+  }
+  return "vinculacion_nomina";
+}
 
 /** Map "1"/"2" replies to the option text from the last clarification. */
 function resolveClarificationChoice(
@@ -22,11 +112,12 @@ function resolveClarificationChoice(
   const match = /^([1-9])$/.exec(trimmed);
   if (!match) return message;
 
-  const lastWithOptions = [...history]
-    .reverse()
-    .find(
-      (m) => m.role === "assistant" && /^\s*\d+\.\s+.+/m.test(m.content)
-    );
+  // Only menus the bot generated; LLM answers also contain numbered steps.
+  const lastAssistant = [...history].reverse().find((m) => m.role === "assistant");
+  const lastWithOptions =
+    lastAssistant && MENU_MARKERS.some((mk) => lastAssistant.content.includes(mk))
+      ? lastAssistant
+      : undefined;
   if (!lastWithOptions) return message;
 
   const options = [
@@ -76,7 +167,7 @@ function formatClarification(
   const opts = options?.length
     ? "\n\n" + options.map((o, i) => `${i + 1}. ${o}`).join("\n")
     : "";
-  return `Entiendo tu duda. Para enfocarte mejor la respuesta: ${question}${opts}\n\nRecuerda: este asistente responde únicamente con base en los documentos cargados.`;
+  return `Entiendo tu duda. ${CLARIFY_MARKER}: ${question}${opts}\n\nRecuerda: este asistente responde únicamente con base en los documentos cargados.`;
 }
 
 export async function handleChat(req: ChatRequest): Promise<ChatResponse> {
@@ -131,6 +222,37 @@ export async function handleChat(req: ChatRequest): Promise<ChatResponse> {
     };
   }
 
+  const smallTalk = detectSmallTalk(guard.sanitized);
+  if (smallTalk) {
+    const reply = smallTalk === "greeting" ? WELCOME_MESSAGE : FAREWELL_MESSAGE;
+    await logMessage({
+      sessionId: session.id,
+      role: "assistant",
+      content: reply,
+      topic: "conversacion",
+      latencyMs: Date.now() - started,
+    });
+    if (smallTalk === "farewell") {
+      await closeSession(session.id, "farewell");
+      await logEvent({
+        sessionId: session.id,
+        type: "session_closed",
+        channel: req.channel,
+        payload: { reason: "farewell" },
+      });
+    }
+    return {
+      sessionId: session.id,
+      reply,
+      topic: "conversacion",
+      grounded: true,
+      clarified: false,
+      blocked: false,
+      options: smallTalk === "greeting" ? [...MAIN_MENU] : undefined,
+      latencyMs: Date.now() - started,
+    };
+  }
+
   const classification = await classifyAndClarify(guard.sanitized, history);
 
   // User already chose 1/2/3… or an option label from a prior menu — answer, don't re-ask.
@@ -146,14 +268,26 @@ export async function handleChat(req: ChatRequest): Promise<ChatResponse> {
         )
     );
 
-  if (choseListedOption) {
+  if (NOMINA_ONLY_RE.test(guard.sanitized)) {
+    classification.topic = "vinculacion_nomina";
+  }
+
+  const pickedMainCategory = MAIN_MENU.find((c) =>
+    guard.sanitized.endsWith(c)
+  );
+
+  if (pickedMainCategory) {
+    classification.topic = topicFromLabel(pickedMainCategory);
+    classification.needs_clarification = true;
+    classification.clarification_question = `¿Sobre qué tema de ${pickedMainCategory.toLowerCase()} necesitas información?`;
+    classification.options = CATEGORY_OPTIONS[pickedMainCategory];
+  } else if (choseListedOption) {
     classification.needs_clarification = false;
     if (
       classification.topic === "fuera_alcance" ||
       classification.confidence < 0.5
     ) {
-      // Short picks like "1" / "Auxilio educativo" often follow the auxilios menu.
-      classification.topic = "auxilios_beneficios";
+      classification.topic = topicFromLabel(guard.sanitized);
     }
   }
 
@@ -221,6 +355,10 @@ export async function handleChat(req: ChatRequest): Promise<ChatResponse> {
   let chunks: Awaited<ReturnType<typeof retrieveChunks>> = [];
   try {
     chunks = await retrieveChunks(guard.sanitized, classification.topic, 5);
+    if (!chunks.length) {
+      // Classifier may have picked the wrong document; search the whole corpus.
+      chunks = await retrieveChunks(guard.sanitized, undefined, 5);
+    }
   } catch (err) {
     console.error("RAG retrieve failed:", err);
   }

@@ -11,6 +11,7 @@
     "db:migrate": "tsx scripts/migrate.ts",
     "db:push": "drizzle-kit push",
     "ingest": "tsx scripts/ingest.ts",
+    "eval:retrieval": "tsx scripts/eval-retrieval.ts",
     "test:guardrails": "tsx src/lib/security/guardrails.test.ts"
   },
   "dependencies": {
