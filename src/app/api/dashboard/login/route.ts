@@ -1,19 +1,31 @@
 import { NextRequest, NextResponse } from "next/server";
+import {
+  DASHBOARD_COOKIE,
+  DASHBOARD_SESSION_SECONDS,
+  checkDashboardPassword,
+  createDashboardToken,
+} from "@/lib/auth/dashboard";
 
 export async function POST(req: NextRequest) {
-  const { password } = await req.json();
-  const expected = process.env.DASHBOARD_PASSWORD ?? "prebel-gh-demo";
+  const { password } = await req.json().catch(() => ({}));
 
-  if (password !== expected) {
+  if (!checkDashboardPassword(password)) {
     return NextResponse.json({ ok: false }, { status: 401 });
   }
 
   const res = NextResponse.json({ ok: true });
-  res.cookies.set("gh_dash_auth", expected, {
+  res.cookies.set(DASHBOARD_COOKIE, createDashboardToken(), {
     httpOnly: true,
-    sameSite: "lax",
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "strict",
     path: "/",
-    maxAge: 60 * 60 * 12,
+    maxAge: DASHBOARD_SESSION_SECONDS,
   });
+  return res;
+}
+
+export async function DELETE() {
+  const res = NextResponse.json({ ok: true });
+  res.cookies.delete(DASHBOARD_COOKIE);
   return res;
 }

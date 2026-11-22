@@ -1,3 +1,4 @@
+import { createHmac, timingSafeEqual } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { handleChat } from "@/lib/orchestrator/chat";
 import {
@@ -23,8 +24,32 @@ export async function GET(req: NextRequest) {
   return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 }
 
+function hasValidSignature(rawBody: string, header: string | null): boolean {
+  const secret = process.env.WHATSAPP_APP_SECRET?.trim();
+  if (!secret) {
+    console.warn("WHATSAPP_APP_SECRET not set; webhook signature not verified");
+    return true;
+  }
+  if (!header?.startsWith("sha256=")) return false;
+  const expected = Buffer.from(
+    createHmac("sha256", secret).update(rawBody, "utf8").digest("hex")
+  );
+  const received = Buffer.from(header.slice("sha256=".length));
+  return expected.length === received.length && timingSafeEqual(expected, received);
+}
+
 export async function POST(req: NextRequest) {
-  const body = await req.json();
+  const rawBody = await req.text();
+  if (!hasValidSignature(rawBody, req.headers.get("x-hub-signature-256"))) {
+    return NextResponse.json({ error: "Invalid signature" }, { status: 401 });
+  }
+
+  let body: unknown;
+  try {
+    body = JSON.parse(rawBody);
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
+  }
 
   // Always 200 quickly for Meta; process inline for demo (or queue in prod)
   const messages = parseWhatsAppWebhook(body);

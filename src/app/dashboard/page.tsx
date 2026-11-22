@@ -19,36 +19,34 @@ export default function DashboardPage() {
   const [authError, setAuthError] = useState(false);
   const [metrics, setMetrics] = useState<DashboardMetrics | null>(null);
   const [loading, setLoading] = useState(false);
-  const [dashPassword, setDashPassword] = useState("");
 
-  const load = useCallback(async (pwd: string) => {
+  const load = useCallback(async (): Promise<boolean> => {
     setLoading(true);
     try {
-      const res = await fetch("/api/dashboard/metrics?days=30", {
-        headers: { "x-dashboard-password": pwd },
-      });
+      const res = await fetch("/api/dashboard/metrics?days=30");
       if (!res.ok) {
         setAuthed(false);
-        setAuthError(true);
-        return;
+        return false;
       }
-      const data = await res.json();
-      setMetrics(data);
+      setMetrics(await res.json());
       setAuthed(true);
       setAuthError(false);
-      setDashPassword(pwd);
+      return true;
     } finally {
       setLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    const saved =
-      typeof window !== "undefined"
-        ? sessionStorage.getItem("gh_dash_pwd")
-        : null;
-    if (saved) void load(saved);
+    void load();
   }, [load]);
+
+  const onLogout = async () => {
+    await fetch("/api/dashboard/login", { method: "DELETE" });
+    setAuthed(false);
+    setMetrics(null);
+    setPassword("");
+  };
 
   const onLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -57,12 +55,9 @@ export default function DashboardPage() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ password }),
     });
-    if (!login.ok) {
+    if (!login.ok || !(await load())) {
       setAuthError(true);
-      return;
     }
-    sessionStorage.setItem("gh_dash_pwd", password);
-    await load(password);
   };
 
   if (!authed) {
@@ -122,10 +117,17 @@ export default function DashboardPage() {
         <div className="flex gap-2">
           <button
             type="button"
-            onClick={() => void load(dashPassword)}
+            onClick={() => void load()}
             className="rounded-full border border-[var(--leaf)]/30 bg-white px-3 py-1.5 text-xs font-medium text-[var(--forest)]"
           >
             {loading ? "Actualizando…" : "Actualizar"}
+          </button>
+          <button
+            type="button"
+            onClick={() => void onLogout()}
+            className="rounded-full border border-[var(--leaf)]/30 bg-white px-3 py-1.5 text-xs font-medium text-[var(--forest)]"
+          >
+            Salir
           </button>
           <Link
             href="/"

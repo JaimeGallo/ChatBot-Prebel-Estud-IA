@@ -1,11 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDashboardMetrics } from "@/lib/telemetry";
+import { DASHBOARD_COOKIE, verifyDashboardToken } from "@/lib/auth/dashboard";
 
 export async function GET(req: NextRequest) {
-  const auth = req.headers.get("x-dashboard-password");
-  const expected = process.env.DASHBOARD_PASSWORD ?? "prebel-gh-demo";
-
-  if (auth !== expected) {
+  if (!verifyDashboardToken(req.cookies.get(DASHBOARD_COOKIE)?.value)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
